@@ -99,7 +99,7 @@
     </div>
 
 <script>
-    // HTML要素の取得
+    // === 1. HTML要素の取得 ===
     const startButton = document.getElementById('startButton');
     const cameraToggleButton = document.getElementById('cameraToggleButton');
     const cameraSwitchButton = document.getElementById('cameraSwitchButton');
@@ -116,28 +116,31 @@
     const delayDisplayContainer = document.getElementById('delayDisplayContainer');
     const distanceLimitMessage = document.getElementById('distanceLimitMessage');
 
-    // Web Audio APIの準備
+    // === 2. Web Audio API と定数の準備 ===
     const audioContext = new AudioContext();
     const MAX_DELAY_SECONDS = 180.0;
     let delayNode = audioContext.createDelay(MAX_DELAY_SECONDS);
     const gainNode = audioContext.createGain();
 
-    // グローバル変数の定義
+    // === 3. グローバル変数の定義 ===
     let currentStream;
     let videoDevices = [];
     let currentDeviceIndex = 0;
     let audioSourceNode = null;
     let isCameraOn = false;
 
+    // === 4. 関数定義 ===
+
     // 音声バッファをリセットする関数
     function resetAudioBuffer() {
         const currentGain = gainNode.gain.value;
         gainNode.gain.setValueAtTime(currentGain, audioContext.currentTime);
-        gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.1);
-        gainNode.gain.linearRampToValueAtTime(1, audioContext.currentTime + 0.2);
+        gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.05);
+        gainNode.gain.linearRampToValueAtTime(currentGain, audioContext.currentTime + 0.1);
 
         if (audioSourceNode) {
             audioSourceNode.disconnect();
+            delayNode.disconnect(); // 古いdelayNodeの接続も解除
             delayNode = audioContext.createDelay(MAX_DELAY_SECONDS);
             audioSourceNode.connect(delayNode);
             delayNode.connect(gainNode);
@@ -149,10 +152,8 @@
         if (currentStream) {
             currentStream.getTracks().forEach(track => track.stop());
         }
-        const constraints = {
-            audio: true,
-            video: { deviceId: deviceId ? { exact: deviceId } : undefined }
-        };
+        const constraints = { audio: true, video: { deviceId: deviceId ? { exact: deviceId } : undefined } };
+        
         try {
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
             currentStream = stream;
@@ -160,9 +161,7 @@
             isCameraOn = true;
             cameraToggleButton.textContent = 'カメラOFF';
 
-            if (audioSourceNode) {
-                audioSourceNode.disconnect();
-            }
+            if (audioSourceNode) { audioSourceNode.disconnect(); }
             audioSourceNode = audioContext.createMediaStreamSource(stream);
             audioSourceNode.connect(delayNode);
 
@@ -176,42 +175,49 @@
             cameraToggleButton.style.display = 'inline-block';
         } catch (error) {
             console.error("カメラの起動に失敗:", error);
-            statusElement.innerHTML = "<p>エラー: カメラにアクセスできませんでした。</p>";
+            statusElement.innerHTML = "<p>エラー: カメラにアクセスできませんでした。ブラウザの設定で許可を確認してください。</p>";
         }
     }
 
     // カメラのON/OFFを切り替える関数
     function toggleCamera() {
-        if (currentStream) {
-            const videoTrack = currentStream.getVideoTracks()[0];
-            if (videoTrack) {
-                if (isCameraOn) {
-                    videoTrack.stop();
-                    videoElement.srcObject = null;
-                    cameraToggleButton.textContent = 'カメラON';
-                    isCameraOn = false;
-                } else {
-                    startCamera(videoDevices[currentDeviceIndex]?.deviceId);
-                }
-            }
+        if (!currentStream) return;
+        const videoTrack = currentStream.getVideoTracks()[0];
+        if (!videoTrack) return;
+
+        if (isCameraOn) {
+            videoTrack.stop();
+            videoElement.srcObject = null;
+            cameraToggleButton.textContent = 'カメラON';
+            isCameraOn = false;
+        } else {
+            startCamera(videoDevices[currentDeviceIndex]?.deviceId);
         }
     }
-    
+
+    // 遅延時間を計算し適用する関数
+    function updateDelay() {
+        const speed = parseFloat(speedSelector.value);
+        const distanceValue = parseFloat(distanceInput.value) || 0;
+        const unit = unitSelector.value;
+        const distanceMeters = (unit === 'km') ? distanceValue * 1000 : distanceValue;
+
+        if (speed > 0) {
+            const realDelayTime = distanceMeters / speed;
+            const playableDelayTime = Math.min(realDelayTime, MAX_DELAY_SECONDS);
+            delayNode.delayTime.value = playableDelayTime;
+            delayValue.textContent = realDelayTime.toFixed(2);
+        }
+    }
+
     // 距離設定UIを更新する関数
     function updateDistanceControls() {
         const speed = parseFloat(speedSelector.value);
         const unit = unitSelector.value;
         const maxDistanceMeters = speed * MAX_DELAY_SECONDS;
-        let maxDistanceInUnit;
+        const maxDistanceInUnit = (unit === 'km') ? maxDistanceMeters / 1000 : maxDistanceMeters;
 
-        if (unit === 'km') {
-            maxDistanceInUnit = maxDistanceMeters / 1000;
-            distanceSlider.step = 0.1;
-        } else {
-            maxDistanceInUnit = maxDistanceMeters;
-            distanceSlider.step = 10;
-        }
-
+        distanceSlider.step = (unit === 'km') ? 0.1 : 10;
         distanceInput.max = maxDistanceInUnit;
         distanceSlider.max = maxDistanceInUnit;
         distanceLimitMessage.textContent = `(設定可能な最大距離: ${maxDistanceInUnit.toFixed(1)} ${unit})`;
@@ -222,36 +228,20 @@
         }
         updateDelay();
     }
+
+    // === 5. イベントリスナーの設定 ===
     
-    // 遅延時間を計算し適用する関数
-    function updateDelay() {
-        const speed = parseFloat(speedSelector.value);
-        let distanceMeters = 0;
-        const distanceValue = parseFloat(distanceInput.value) || 0;
-        const unit = unitSelector.value;
-
-        if (unit === 'km') {
-            distanceMeters = distanceValue * 1000;
-        } else {
-            distanceMeters = distanceValue;
-        }
-
-        if (speed > 0) {
-            const realDelayTime = distanceMeters / speed;
-            const playableDelayTime = Math.min(realDelayTime, MAX_DELAY_SECONDS);
-            delayNode.delayTime.value = playableDelayTime;
-            delayValue.textContent = realDelayTime.toFixed(2);
-        }
-    }
-
-    // イベントリスナーの設定
+    // 開始ボタン
     startButton.addEventListener('click', async () => {
         try {
             if (audioContext.state === 'suspended') {
                 await audioContext.resume();
             }
+            delayNode.connect(gainNode);
             gainNode.connect(audioContext.destination);
+            
             await startCamera();
+            
             statusElement.textContent = "シミュレーション中です。";
             startButton.style.display = 'none';
             controlsElement.style.display = 'block';
@@ -262,6 +252,7 @@
         }
     });
 
+    // カメラ切り替えボタン
     cameraSwitchButton.addEventListener('click', () => {
         if (videoDevices.length > 1) {
             currentDeviceIndex = (currentDeviceIndex + 1) % videoDevices.length;
@@ -269,15 +260,19 @@
             startCamera(nextDeviceId);
         }
     });
-    
+
+    // カメラON/OFFボタン
     cameraToggleButton.addEventListener('click', toggleCamera);
 
+    // 音量スライダー
     volumeSlider.addEventListener('input', () => {
         gainNode.gain.value = volumeSlider.value;
     });
 
+    // 音速セレクター
     speedSelector.addEventListener('change', updateDistanceControls);
 
+    // 距離入力（数値）
     distanceInput.addEventListener('input', () => {
         resetAudioBuffer();
         const value = parseFloat(distanceInput.value) || 0;
@@ -289,23 +284,24 @@
         updateDelay();
     });
 
+    // 単位セレクター
     unitSelector.addEventListener('change', () => {
         resetAudioBuffer();
         updateDistanceControls();
     });
 
+    // 距離スライダー
     distanceSlider.addEventListener('input', () => {
         resetAudioBuffer();
         distanceInput.value = distanceSlider.value;
         updateDelay();
     });
 
+    // 遅延表示トグル
     toggleDelay.addEventListener('change', () => {
         delayDisplayContainer.style.display = toggleDelay.checked ? 'block' : 'none';
     });
 
-    // 初期化
-    updateDistanceControls();
 </script>
 
 </body>
