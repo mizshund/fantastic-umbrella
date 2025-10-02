@@ -6,17 +6,16 @@
     <title>音の遅延シミュレーション</title>
     <style>
         body { font-family: sans-serif; padding: 20px; text-align: center; }
-        /* ↓ スマホ画面でも見やすいようにCSSを調整 */
         video { 
             width: 100%; 
-            max-width: 640px; /* PCでの最大幅を指定 */
+            max-width: 640px;
             height: auto;
             border: 1px solid #ccc;
             background-color: #000;
         }
         .controls { 
             margin-top: 20px; 
-            display: none; /* 最初は非表示にしておく */
+            display: none;
             max-width: 640px;
             margin-left: auto;
             margin-right: auto;
@@ -24,10 +23,22 @@
         }
         label { display: block; margin-top: 15px; }
         input[type="range"] { width: 100%; }
-        #startButton {
-            font-size: 1.2em;
-            padding: 10px 20px;
+        button {
+            font-size: 1.1em;
+            padding: 10px 15px;
             cursor: pointer;
+            margin-top: 10px;
+        }
+        /* ▼▼▼ 距離入力欄のスタイルを追加 ▼▼▼ */
+        .distance-input-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        input[type="number"] {
+            width: 100px;
+            font-size: 1em;
+            padding: 5px;
         }
     </style>
 </head>
@@ -39,6 +50,8 @@
     <button id="startButton">シミュレーション開始</button>
 
     <video id="video" autoplay playsinline muted></video>
+    
+    <button id="cameraSwitchButton" style="display: none;">カメラ切り替え</button>
 
     <div id="controls" class="controls">
         <label for="speed">音の速さ (m/s):</label>
@@ -48,80 +61,147 @@
             <option value="5000">鉄の中 (5000 m/s)</option>
         </select>
 
-        <label for="distance">音源からの距離 (m):</label>
-        <input type="range" id="distance" min="0" max="1000" value="0" step="10">
-        <span id="distanceValue">0</span> m
-
+        <label for="distance">音源からの距離:</label>
+        <div class="distance-input-container">
+            <input type="number" id="distanceInput" min="0" value="0">
+            <select id="unitSelector">
+                <option value="m">m</option>
+                <option value="km">km</option>
+            </select>
+        </div>
+        <input type="range" id="distanceSlider" min="0" max="1000" value="0" step="10">
         <p>計算された遅延時間: <b id="delayValue">0.00</b> 秒</p>
     </div>
 
 <script>
-    // HTML要素の取得
     const startButton = document.getElementById('startButton');
+    const cameraSwitchButton = document.getElementById('cameraSwitchButton');
     const videoElement = document.getElementById('video');
     const statusElement = document.getElementById('status');
     const controlsElement = document.getElementById('controls');
     const speedSelector = document.getElementById('speed');
-    const distanceSlider = document.getElementById('distance');
-    const distanceValue = document.getElementById('distanceValue');
     const delayValue = document.getElementById('delayValue');
 
-    // Web Audio APIの準備
+    // ▼▼▼ 距離関連の要素を取得 ▼▼▼
+    const distanceInput = document.getElementById('distanceInput');
+    const unitSelector = document.getElementById('unitSelector');
+    const distanceSlider = document.getElementById('distanceSlider');
+
     const audioContext = new AudioContext();
     const delayNode = audioContext.createDelay(5.0); 
 
-    // ▼▼▼ メインの処理をここから変更 ▼▼▼
+    let currentStream;
+    let videoDevices = [];
+    let currentDeviceIndex = 0;
 
-    // 開始ボタンが押された時の処理
-    startButton.addEventListener('click', async () => {
+    async function startCamera(deviceId) {
+        if (currentStream) {
+            currentStream.getTracks().forEach(track => track.stop());
+        }
+        const constraints = {
+            audio: true,
+            video: { deviceId: deviceId ? { exact: deviceId } : undefined }
+        };
         try {
-            // AudioContextをユーザー操作によって開始（iOSで特に重要）
-            if (audioContext.state === 'suspended') {
-                await audioContext.resume();
-            }
-
-            // カメラとマイクへのアクセス
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-
-            // 映像の表示 (playsinline属性でインライン再生)
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            currentStream = stream;
             videoElement.srcObject = stream;
             
-            // 音声処理のセットアップ
-            const source = audioContext.createMediaStreamSource(stream);
-            source.connect(delayNode);
-            delayNode.connect(audioContext.destination);
-
-            // UIの表示を更新
-            statusElement.textContent = "シミュレーション中です。";
-            startButton.style.display = 'none'; // 開始ボタンを隠す
-            controlsElement.style.display = 'block'; // 操作パネルを表示
-
-            updateDelay(); // 遅延の初期値を設定
-
+            if (audioContext.state !== 'running') {
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(delayNode);
+                delayNode.connect(audioContext.destination);
+            }
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            videoDevices = devices.filter(device => device.kind === 'videoinput');
+            if (videoDevices.length > 1) {
+                cameraSwitchButton.style.display = 'inline-block';
+            }
         } catch (error) {
-            console.error("メディアデバイスへのアクセスエラー:", error);
-            statusElement.innerHTML = "<p>エラー: カメラやマイクにアクセスできませんでした。ブラウザの設定で許可してください。</p>";
+            console.error("カメラの起動に失敗:", error);
+            statusElement.innerHTML = "<p>エラー: カメラにアクセスできませんでした。</p>";
         }
+    }
+
+    startButton.addEventListener('click', async () => {
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
+        await startCamera();
+        statusElement.textContent = "シミュレーション中です。";
+        startButton.style.display = 'none';
+        controlsElement.style.display = 'block';
+        updateDelay();
     });
 
-    // ▲▲▲ メインの処理の変更ここまで ▲▲▲
+    cameraSwitchButton.addEventListener('click', () => {
+        if (videoDevices.length > 1) {
+            currentDeviceIndex = (currentDeviceIndex + 1) % videoDevices.length;
+            const nextDeviceId = videoDevices[currentDeviceIndex].deviceId;
+            startCamera(nextDeviceId);
+        }
+    });
+    
+    // ▼▼▼ 遅延計算とUI連携のロジックを更新 ▼▼▼
 
-    // 遅延時間を計算して設定する関数
+    // スライダーの最大値を単位に応じて変更する関数
+    function updateSliderMax() {
+        const unit = unitSelector.value;
+        if (unit === 'km') {
+            distanceSlider.max = 100; // kmの場合、スライダーは最大100kmまで
+            distanceSlider.step = 1;
+        } else {
+            distanceSlider.max = 1000; // mの場合、スライダーは最大1000mまで
+            distanceSlider.step = 10;
+        }
+    }
+
+    // 遅延時間を計算して設定するメインの関数
     function updateDelay() {
         const speed = parseFloat(speedSelector.value);
-        const distance = parseFloat(distanceSlider.value);
-        distanceValue.textContent = distance;
+        let distanceMeters = 0;
+        
+        const distanceValue = parseFloat(distanceInput.value) || 0;
+        const unit = unitSelector.value;
+
+        // 単位に応じてメートルに変換
+        if (unit === 'km') {
+            distanceMeters = distanceValue * 1000;
+        } else {
+            distanceMeters = distanceValue;
+        }
 
         if (speed > 0) {
-            const delayTime = distance / speed;
+            // 遅延時間は最大5秒までに制限（AudioContextの上限）
+            const delayTime = Math.min(distanceMeters / speed, 5.0);
             delayNode.delayTime.value = delayTime;
             delayValue.textContent = delayTime.toFixed(2);
         }
     }
 
-    // イベントリスナーの設定
+    // 各UIイベントリスナー
     speedSelector.addEventListener('change', updateDelay);
-    distanceSlider.addEventListener('input', updateDelay);
+    distanceInput.addEventListener('input', () => {
+        const value = parseFloat(distanceInput.value) || 0;
+        distanceSlider.value = value; // 入力値をスライダーに反映
+        updateDelay();
+    });
+    unitSelector.addEventListener('change', () => {
+        updateSliderMax();
+        // 単位変更時、現在の入力値は維持したまま再計算
+        const value = parseFloat(distanceInput.value) || 0;
+        distanceSlider.value = value;
+        updateDelay();
+    });
+    distanceSlider.addEventListener('input', () => {
+        const value = distanceSlider.value;
+        distanceInput.value = value; // スライダーの値を入力欄に反映
+        updateDelay();
+    });
+
+    // 初期化
+    updateSliderMax();
+    // ▲▲▲ 遅延計算とUI連携のロジックここまで ▲▲▲
 
 </script>
 
