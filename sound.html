@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>音の遅延シミュレーション</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; text-align: center; }
+        /* ↓ スマホ画面でも見やすいようにCSSを調整 */
+        video { 
+            width: 100%; 
+            max-width: 640px; /* PCでの最大幅を指定 */
+            height: auto;
+            border: 1px solid #ccc;
+            background-color: #000;
+        }
+        .controls { 
+            margin-top: 20px; 
+            display: none; /* 最初は非表示にしておく */
+            max-width: 640px;
+            margin-left: auto;
+            margin-right: auto;
+            text-align: left;
+        }
+        label { display: block; margin-top: 15px; }
+        input[type="range"] { width: 100%; }
+        #startButton {
+            font-size: 1.2em;
+            padding: 10px 20px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>音の伝わり方 シミュレーション</h1>
+    <div id="status"><p>下のボタンを押してシミュレーションを開始してください。</p></div>
+
+    <button id="startButton">シミュレーション開始</button>
+
+    <video id="video" autoplay playsinline muted></video>
+
+    <div id="controls" class="controls">
+        <label for="speed">音の速さ (m/s):</label>
+        <select id="speed">
+            <option value="340">空気中 (340 m/s)</option>
+            <option value="1500">水中 (1500 m/s)</option>
+            <option value="5000">鉄の中 (5000 m/s)</option>
+        </select>
+
+        <label for="distance">音源からの距離 (m):</label>
+        <input type="range" id="distance" min="0" max="1000" value="0" step="10">
+        <span id="distanceValue">0</span> m
+
+        <p>計算された遅延時間: <b id="delayValue">0.00</b> 秒</p>
+    </div>
+
+<script>
+    // HTML要素の取得
+    const startButton = document.getElementById('startButton');
+    const videoElement = document.getElementById('video');
+    const statusElement = document.getElementById('status');
+    const controlsElement = document.getElementById('controls');
+    const speedSelector = document.getElementById('speed');
+    const distanceSlider = document.getElementById('distance');
+    const distanceValue = document.getElementById('distanceValue');
+    const delayValue = document.getElementById('delayValue');
+
+    // Web Audio APIの準備
+    const audioContext = new AudioContext();
+    const delayNode = audioContext.createDelay(5.0); 
+
+    // ▼▼▼ メインの処理をここから変更 ▼▼▼
+
+    // 開始ボタンが押された時の処理
+    startButton.addEventListener('click', async () => {
+        try {
+            // AudioContextをユーザー操作によって開始（iOSで特に重要）
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
+            // カメラとマイクへのアクセス
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+            // 映像の表示 (playsinline属性でインライン再生)
+            videoElement.srcObject = stream;
+            
+            // 音声処理のセットアップ
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(delayNode);
+            delayNode.connect(audioContext.destination);
+
+            // UIの表示を更新
+            statusElement.textContent = "シミュレーション中です。";
+            startButton.style.display = 'none'; // 開始ボタンを隠す
+            controlsElement.style.display = 'block'; // 操作パネルを表示
+
+            updateDelay(); // 遅延の初期値を設定
+
+        } catch (error) {
+            console.error("メディアデバイスへのアクセスエラー:", error);
+            statusElement.innerHTML = "<p>エラー: カメラやマイクにアクセスできませんでした。ブラウザの設定で許可してください。</p>";
+        }
+    });
+
+    // ▲▲▲ メインの処理の変更ここまで ▲▲▲
+
+    // 遅延時間を計算して設定する関数
+    function updateDelay() {
+        const speed = parseFloat(speedSelector.value);
+        const distance = parseFloat(distanceSlider.value);
+        distanceValue.textContent = distance;
+
+        if (speed > 0) {
+            const delayTime = distance / speed;
+            delayNode.delayTime.value = delayTime;
+            delayValue.textContent = delayTime.toFixed(2);
+        }
+    }
+
+    // イベントリスナーの設定
+    speedSelector.addEventListener('change', updateDelay);
+    distanceSlider.addEventListener('input', updateDelay);
+
+</script>
+
+</body>
+</html>
+
+## 主な変更点 🛠️
+ * metaタグの追加: <head>内に<meta name="viewport" ...>を追加しました。これにより、スマホの画面サイズに合わせてページが正しく表示されます。
+ * 開始ボタンの設置: ユーザーが「シミュレーション開始」ボタンをタップするまで、カメラやマイクは起動しないようにしました。これにより、モバイルブラウザの制限をクリアできます。
+ * AudioContext.resume()の追加: ユーザーの操作をきっかけにaudioContext.resume()を実行し、音声処理が停止状態だった場合に再開させるようにしました。これは特にiOS/iPadOSで安定した動作のために重要です。
+ * UIの表示切り替え: 最初は開始ボタンだけを表示し、ボタンが押されてシミュレーションが始まったら操作パネル（スライダーなど）を表示するように変更し、使い勝手を向上させました。
+ * playsinline属性の追加: <video>タグにplaysinline属性を追加しました。これにより、iPhoneのSafariで動画が全画面表示になるのを防ぎ、ページ内で再生されるようになります。
+これらの修正により、スマートフォンやタブレットでもはるかに動作しやすくなっているはずです。
