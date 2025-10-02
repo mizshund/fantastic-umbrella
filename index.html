@@ -91,8 +91,6 @@
     let currentStream;
     let videoDevices = [];
     let currentDeviceIndex = 0;
-    
-    // ▼▼▼ 音声ソースを管理する変数を追加 ▼▼▼
     let audioSourceNode = null;
 
     async function startCamera(deviceId) {
@@ -100,7 +98,6 @@
             currentStream.getTracks().forEach(track => track.stop());
         }
         const constraints = {
-            // 音声は常に有効にする
             audio: true,
             video: { deviceId: deviceId ? { exact: deviceId } : undefined }
         };
@@ -109,23 +106,12 @@
             currentStream = stream;
             videoElement.srcObject = stream;
             
-            // ▼▼▼ 音声接続の処理を修正 ▼▼▼
-            // 以前の音声ソースがあれば接続を解除
             if (audioSourceNode) {
                 audioSourceNode.disconnect();
             }
-            // 新しいストリームから新しい音声ソースを作成
             audioSourceNode = audioContext.createMediaStreamSource(stream);
-            // 新しいソースを遅延ノードに接続
             audioSourceNode.connect(delayNode);
-            // ▲▲▲ 音声接続の修正ここまで ▲▲▲
-
-            // 遅延ノードから最終出力（スピーカー）への接続は一度だけでOK
-            if (audioContext.state !== 'running') {
-                delayNode.connect(audioContext.destination);
-            }
             
-            // カメラ切り替えボタンの表示ロジック
             if (videoDevices.length === 0) {
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 videoDevices = devices.filter(device => device.kind === 'videoinput');
@@ -139,16 +125,26 @@
         }
     }
 
+    // ▼▼▼ 開始ボタンの処理を修正 ▼▼▼
     startButton.addEventListener('click', async () => {
+        // 1. 音声システムを起動
         if (audioContext.state === 'suspended') {
             await audioContext.resume();
         }
+
+        // 2. 音声の出口（スピーカー）を確定（この処理が抜けていた）
+        delayNode.connect(audioContext.destination);
+
+        // 3. カメラとマイクを起動
         await startCamera();
+
+        // 4. UIを更新
         statusElement.textContent = "シミュレーション中です。";
         startButton.style.display = 'none';
         controlsElement.style.display = 'block';
         updateDelay();
     });
+    // ▲▲▲ 修正ここまで ▲▲▲
 
     cameraSwitchButton.addEventListener('click', () => {
         if (videoDevices.length > 1) {
