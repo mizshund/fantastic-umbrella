@@ -39,6 +39,18 @@
             font-size: 1em;
             padding: 5px;
         }
+        .toggle-container {
+            margin-top: 20px;
+        }
+        #distanceLimitMessage {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+        /* ▼▼▼ カメラ操作ボタンのコンテナ ▼▼▼ */
+        .camera-controls {
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -50,7 +62,10 @@
 
     <video id="video" autoplay playsinline muted></video>
     
-    <button id="cameraSwitchButton" style="display: none;">カメラ切り替え</button>
+    <div class="camera-controls">
+        <button id="cameraToggleButton" style="display: none;">カメラOFF</button>
+        <button id="cameraSwitchButton" style="display: none;">カメラ切り替え</button>
+    </div>
 
     <div id="controls" class="controls">
         <label for="speed">音の速さ (m/s):</label>
@@ -68,13 +83,25 @@
                 <option value="km">km</option>
             </select>
         </div>
-        <input type="range" id="distanceSlider" min="0" max="1000" value="0" step="10">
+        <input type="range" id="distanceSlider" min="0" value="0">
+        <p id="distanceLimitMessage"></p>
+        
+        <label for="volumeSlider">音量:</label>
+        <input type="range" id="volumeSlider" min="0" max="1" value="1" step="0.01">
 
-        <p>計算された遅延時間: <b id="delayValue">0.00</b> 秒</p>
+        <div class="toggle-container">
+            <label for="toggleDelay" style="display: inline-block; margin-top: 0;">
+                <input type="checkbox" id="toggleDelay" checked>
+                遅延時間を表示する
+            </label>
+        </div>
+        
+        <p id="delayDisplayContainer">計算された遅延時間: <b id="delayValue">0.00</b> 秒</p>
     </div>
 
 <script>
     const startButton = document.getElementById('startButton');
+    const cameraToggleButton = document.getElementById('cameraToggleButton');
     const cameraSwitchButton = document.getElementById('cameraSwitchButton');
     const videoElement = document.getElementById('video');
     const statusElement = document.getElementById('status');
@@ -84,14 +111,23 @@
     const distanceInput = document.getElementById('distanceInput');
     const unitSelector = document.getElementById('unitSelector');
     const distanceSlider = document.getElementById('distanceSlider');
+    const volumeSlider = document.getElementById('volumeSlider');
+    const toggleDelay = document.getElementById('toggleDelay');
+    const delayDisplayContainer = document.getElementById('delayDisplayContainer');
+    const distanceLimitMessage = document.getElementById('distanceLimitMessage');
 
     const audioContext = new AudioContext();
-    const delayNode = audioContext.createDelay(5.0); 
+    const MAX_DELAY_SECONDS = 180.0;
+    let delayNode = audioContext.createDelay(MAX_DELAY_SECONDS);
+    const gainNode = audioContext.createGain();
 
     let currentStream;
     let videoDevices = [];
     let currentDeviceIndex = 0;
     let audioSourceNode = null;
+    let isCameraOn = false;
+
+    function resetAudioBuffer() { /* ... 変更なし ... */ }
 
     async function startCamera(deviceId) {
         if (currentStream) {
@@ -105,7 +141,9 @@
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
             currentStream = stream;
             videoElement.srcObject = stream;
-            
+            isCameraOn = true;
+            cameraToggleButton.textContent = 'カメラOFF';
+
             if (audioSourceNode) {
                 audioSourceNode.disconnect();
             }
@@ -119,90 +157,70 @@
                     cameraSwitchButton.style.display = 'inline-block';
                 }
             }
+            cameraToggleButton.style.display = 'inline-block';
         } catch (error) {
             console.error("カメラの起動に失敗:", error);
             statusElement.innerHTML = "<p>エラー: カメラにアクセスできませんでした。</p>";
         }
     }
+    
+    // ▼▼▼ カメラのON/OFFを切り替える関数を追加 ▼▼▼
+    function toggleCamera() {
+        if (currentStream) {
+            const videoTrack = currentStream.getVideoTracks()[0];
+            if (videoTrack) {
+                if (isCameraOn) {
+                    videoTrack.stop(); // カメラを停止
+                    videoElement.srcObject = null; // 映像を消す
+                    cameraToggleButton.textContent = 'カメラON';
+                    isCameraOn = false;
+                } else {
+                    // カメラを再度有効にする（ストリームの再取得）
+                    startCamera(videoDevices[currentDeviceIndex]?.deviceId);
+                }
+            }
+        }
+    }
 
-    // ▼▼▼ 開始ボタンの処理を修正 ▼▼▼
     startButton.addEventListener('click', async () => {
-        // 1. 音声システムを起動
         if (audioContext.state === 'suspended') {
             await audioContext.resume();
         }
-
-        // 2. 音声の出口（スピーカー）を確定（この処理が抜けていた）
-        delayNode.connect(audioContext.destination);
-
-        // 3. カメラとマイクを起動
+        gainNode.connect(audioContext.destination);
         await startCamera();
-
-        // 4. UIを更新
         statusElement.textContent = "シミュレーション中です。";
         startButton.style.display = 'none';
         controlsElement.style.display = 'block';
-        updateDelay();
-    });
-    // ▲▲▲ 修正ここまで ▲▲▲
-
-    cameraSwitchButton.addEventListener('click', () => {
-        if (videoDevices.length > 1) {
-            currentDeviceIndex = (currentDeviceIndex + 1) % videoDevices.length;
-            const nextDeviceId = videoDevices[currentDeviceIndex].deviceId;
-            startCamera(nextDeviceId);
-        }
+        updateDistanceControls();
     });
 
-    function updateSliderMax() {
-        const unit = unitSelector.value;
-        if (unit === 'km') {
-            distanceSlider.max = 100;
-            distanceSlider.step = 1;
-        } else {
-            distanceSlider.max = 1000;
-            distanceSlider.step = 10;
-        }
-    }
-
-    function updateDelay() {
-        const speed = parseFloat(speedSelector.value);
-        let distanceMeters = 0;
-        const distanceValue = parseFloat(distanceInput.value) || 0;
-        const unit = unitSelector.value;
-
-        if (unit === 'km') {
-            distanceMeters = distanceValue * 1000;
-        } else {
-            distanceMeters = distanceValue;
-        }
-
-        if (speed > 0) {
-            const delayTime = Math.min(distanceMeters / speed, 5.0);
-            delayNode.delayTime.value = delayTime;
-            delayValue.textContent = delayTime.toFixed(2);
-        }
-    }
-
-    speedSelector.addEventListener('change', updateDelay);
-    distanceInput.addEventListener('input', () => {
-        const value = parseFloat(distanceInput.value) || 0;
-        distanceSlider.value = value;
-        updateDelay();
-    });
-    unitSelector.addEventListener('change', () => {
-        updateSliderMax();
-        const value = parseFloat(distanceInput.value) || 0;
-        distanceSlider.value = value;
-        updateDelay();
-    });
-    distanceSlider.addEventListener('input', () => {
-        const value = distanceSlider.value;
-        distanceInput.value = value;
-        updateDelay();
+    cameraSwitchButton.addEventListener('click', () => { /* ... 変更なし ... */ });
+    cameraToggleButton.addEventListener('click', toggleCamera);
+    
+    // ▼▼▼ 音量スライダーのイベントリスナーを追加 ▼▼▼
+    volumeSlider.addEventListener('input', () => {
+        gainNode.gain.value = volumeSlider.value;
     });
 
-    updateSliderMax();
+    function updateDistanceControls() { /* ... 変更なし ... */ }
+    function updateDelay() { /* ... 変更なし ... */ }
+    distanceInput.addEventListener('input', () => { /* ... 変更なし ... */ });
+    unitSelector.addEventListener('change', () => { /* ... 変更なし ... */ });
+    distanceSlider.addEventListener('input', () => { /* ... 変更なし ... */ });
+    toggleDelay.addEventListener('change', () => { /* ... 変更なし ... */ });
+
+    // 初期化
+    updateDistanceControls();
+
+    // (長いため省略した関数定義)
+    function resetAudioBuffer(){const currentGain=gainNode.gain.value;gainNode.gain.setValueAtTime(currentGain,audioContext.currentTime),gainNode.gain.linearRampToValueAtTime(0,audioContext.currentTime+.1),gainNode.gain.linearRampToValueAtTime(1,audioContext.currentTime+.2),audioSourceNode&&(audioSourceNode.disconnect(),delayNode=audioContext.createDelay(MAX_DELAY_SECONDS),audioSourceNode.connect(delayNode),delayNode.connect(gainNode))}
+    cameraSwitchButton.addEventListener("click",()=>{if(videoDevices.length>1){currentDeviceIndex=(currentDeviceIndex+1)%videoDevices.length;const nextDeviceId=videoDevices[currentDeviceIndex].deviceId;startCamera(nextDeviceId)}});
+    function updateDistanceControls(){const speed=parseFloat(speedSelector.value),unit=unitSelector.value,maxDistanceMeters=speed*MAX_DELAY_SECONDS;let maxDistanceInUnit;"km"===unit?(maxDistanceInUnit=maxDistanceMeters/1e3,distanceSlider.step=.1):(maxDistanceInUnit=maxDistanceMeters,distanceSlider.step=10);distanceInput.max=maxDistanceInUnit,distanceSlider.max=maxDistanceInUnit,distanceLimitMessage.textContent=`(設定可能な最大距離: ${maxDistanceInUnit.toFixed(1)} ${unit})`,parseFloat(distanceInput.value)>maxDistanceInUnit&&(distanceInput.value=maxDistanceInUnit,distanceSlider.value=maxDistanceInUnit),updateDelay()}
+    function updateDelay(){const speed=parseFloat(speedSelector.value);let distanceMeters=0;const distanceValue=parseFloat(distanceInput.value)||0,unit=unitSelector.value;distanceMeters="km"===unit?1e3*distanceValue:distanceValue,speed>0&&(realDelayTime=distanceMeters/speed,playableDelayTime=Math.min(realDelayTime,MAX_DELAY_SECONDS),delayNode.delayTime.value=playableDelayTime,delayValue.textContent=realDelayTime.toFixed(2))}
+    distanceInput.addEventListener("input",()=>{resetAudioBuffer();const value=parseFloat(distanceInput.value)||0,max=parseFloat(distanceInput.max);value>max&&(distanceInput.value=max),distanceSlider.value=distanceInput.value,updateDelay()});
+    unitSelector.addEventListener("change",()=>{resetAudioBuffer(),updateDistanceControls()});
+    distanceSlider.addEventListener("input",()=>{resetAudioBuffer(),distanceInput.value=distanceSlider.value,updateDelay()});
+    toggleDelay.addEventListener("change",()=>{delayDisplayContainer.style.display=toggleDelay.checked?"block":"none"});
 </script>
 
 </body>
