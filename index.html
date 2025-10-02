@@ -29,7 +29,6 @@
             cursor: pointer;
             margin-top: 10px;
         }
-        /* ▼▼▼ 距離入力欄のスタイルを追加 ▼▼▼ */
         .distance-input-container {
             display: flex;
             align-items: center;
@@ -70,6 +69,7 @@
             </select>
         </div>
         <input type="range" id="distanceSlider" min="0" max="1000" value="0" step="10">
+
         <p>計算された遅延時間: <b id="delayValue">0.00</b> 秒</p>
     </div>
 
@@ -81,8 +81,6 @@
     const controlsElement = document.getElementById('controls');
     const speedSelector = document.getElementById('speed');
     const delayValue = document.getElementById('delayValue');
-
-    // ▼▼▼ 距離関連の要素を取得 ▼▼▼
     const distanceInput = document.getElementById('distanceInput');
     const unitSelector = document.getElementById('unitSelector');
     const distanceSlider = document.getElementById('distanceSlider');
@@ -93,12 +91,16 @@
     let currentStream;
     let videoDevices = [];
     let currentDeviceIndex = 0;
+    
+    // ▼▼▼ 音声ソースを管理する変数を追加 ▼▼▼
+    let audioSourceNode = null;
 
     async function startCamera(deviceId) {
         if (currentStream) {
             currentStream.getTracks().forEach(track => track.stop());
         }
         const constraints = {
+            // 音声は常に有効にする
             audio: true,
             video: { deviceId: deviceId ? { exact: deviceId } : undefined }
         };
@@ -107,15 +109,29 @@
             currentStream = stream;
             videoElement.srcObject = stream;
             
+            // ▼▼▼ 音声接続の処理を修正 ▼▼▼
+            // 以前の音声ソースがあれば接続を解除
+            if (audioSourceNode) {
+                audioSourceNode.disconnect();
+            }
+            // 新しいストリームから新しい音声ソースを作成
+            audioSourceNode = audioContext.createMediaStreamSource(stream);
+            // 新しいソースを遅延ノードに接続
+            audioSourceNode.connect(delayNode);
+            // ▲▲▲ 音声接続の修正ここまで ▲▲▲
+
+            // 遅延ノードから最終出力（スピーカー）への接続は一度だけでOK
             if (audioContext.state !== 'running') {
-                const source = audioContext.createMediaStreamSource(stream);
-                source.connect(delayNode);
                 delayNode.connect(audioContext.destination);
             }
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            videoDevices = devices.filter(device => device.kind === 'videoinput');
-            if (videoDevices.length > 1) {
-                cameraSwitchButton.style.display = 'inline-block';
+            
+            // カメラ切り替えボタンの表示ロジック
+            if (videoDevices.length === 0) {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                videoDevices = devices.filter(device => device.kind === 'videoinput');
+                if (videoDevices.length > 1) {
+                    cameraSwitchButton.style.display = 'inline-block';
+                }
             }
         } catch (error) {
             console.error("カメラの起動に失敗:", error);
@@ -141,30 +157,24 @@
             startCamera(nextDeviceId);
         }
     });
-    
-    // ▼▼▼ 遅延計算とUI連携のロジックを更新 ▼▼▼
 
-    // スライダーの最大値を単位に応じて変更する関数
     function updateSliderMax() {
         const unit = unitSelector.value;
         if (unit === 'km') {
-            distanceSlider.max = 100; // kmの場合、スライダーは最大100kmまで
+            distanceSlider.max = 100;
             distanceSlider.step = 1;
         } else {
-            distanceSlider.max = 1000; // mの場合、スライダーは最大1000mまで
+            distanceSlider.max = 1000;
             distanceSlider.step = 10;
         }
     }
 
-    // 遅延時間を計算して設定するメインの関数
     function updateDelay() {
         const speed = parseFloat(speedSelector.value);
         let distanceMeters = 0;
-        
         const distanceValue = parseFloat(distanceInput.value) || 0;
         const unit = unitSelector.value;
 
-        // 単位に応じてメートルに変換
         if (unit === 'km') {
             distanceMeters = distanceValue * 1000;
         } else {
@@ -172,37 +182,31 @@
         }
 
         if (speed > 0) {
-            // 遅延時間は最大5秒までに制限（AudioContextの上限）
             const delayTime = Math.min(distanceMeters / speed, 5.0);
             delayNode.delayTime.value = delayTime;
             delayValue.textContent = delayTime.toFixed(2);
         }
     }
 
-    // 各UIイベントリスナー
     speedSelector.addEventListener('change', updateDelay);
     distanceInput.addEventListener('input', () => {
         const value = parseFloat(distanceInput.value) || 0;
-        distanceSlider.value = value; // 入力値をスライダーに反映
+        distanceSlider.value = value;
         updateDelay();
     });
     unitSelector.addEventListener('change', () => {
         updateSliderMax();
-        // 単位変更時、現在の入力値は維持したまま再計算
         const value = parseFloat(distanceInput.value) || 0;
         distanceSlider.value = value;
         updateDelay();
     });
     distanceSlider.addEventListener('input', () => {
         const value = distanceSlider.value;
-        distanceInput.value = value; // スライダーの値を入力欄に反映
+        distanceInput.value = value;
         updateDelay();
     });
 
-    // 初期化
     updateSliderMax();
-    // ▲▲▲ 遅延計算とUI連携のロジックここまで ▲▲▲
-
 </script>
 
 </body>
