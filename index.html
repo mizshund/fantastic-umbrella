@@ -131,52 +131,42 @@
 
     // === 4. 関数定義 ===
 
+    // どの関数よりも先に、イベントリスナーを設定
+    setupEventListeners();
+
     // 音声バッファをリセットする関数
     function resetAudioBuffer() {
+        if (!audioSourceNode) return; // ソースがない場合は何もしない
+        
         const currentGain = gainNode.gain.value;
+        gainNode.gain.cancelScheduledValues(audioContext.currentTime);
         gainNode.gain.setValueAtTime(currentGain, audioContext.currentTime);
         gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.05);
         gainNode.gain.linearRampToValueAtTime(currentGain, audioContext.currentTime + 0.1);
 
-        if (audioSourceNode) {
-            audioSourceNode.disconnect();
-            delayNode.disconnect(); // 古いdelayNodeの接続も解除
-            delayNode = audioContext.createDelay(MAX_DELAY_SECONDS);
-            audioSourceNode.connect(delayNode);
-            delayNode.connect(gainNode);
-        }
+        audioSourceNode.disconnect();
+        delayNode.disconnect();
+        delayNode = audioContext.createDelay(MAX_DELAY_SECONDS);
+        audioSourceNode.connect(delayNode);
+        delayNode.connect(gainNode);
+        updateDelay(); // 新しいDelayNodeに現在の遅延時間を再設定
     }
-
-    // カメラを起動/再起動する関数
-    async function startCamera(deviceId) {
+    
+    // ストリーム（マイク・カメラ）をセットアップする関数
+    async function setupStream(deviceId) {
         if (currentStream) {
             currentStream.getTracks().forEach(track => track.stop());
         }
         const constraints = { audio: true, video: { deviceId: deviceId ? { exact: deviceId } : undefined } };
         
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            currentStream = stream;
-            videoElement.srcObject = stream;
-            isCameraOn = true;
-            cameraToggleButton.textContent = 'カメラOFF';
+        currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+        videoElement.srcObject = currentStream;
+        isCameraOn = true;
+        cameraToggleButton.textContent = 'カメラOFF';
 
-            if (audioSourceNode) { audioSourceNode.disconnect(); }
-            audioSourceNode = audioContext.createMediaStreamSource(stream);
-            audioSourceNode.connect(delayNode);
-
-            if (videoDevices.length === 0) {
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                videoDevices = devices.filter(device => device.kind === 'videoinput');
-                if (videoDevices.length > 1) {
-                    cameraSwitchButton.style.display = 'inline-block';
-                }
-            }
-            cameraToggleButton.style.display = 'inline-block';
-        } catch (error) {
-            console.error("カメラの起動に失敗:", error);
-            statusElement.innerHTML = "<p>エラー: カメラにアクセスできませんでした。ブラウザの設定で許可を確認してください。</p>";
-        }
+        if (audioSourceNode) { audioSourceNode.disconnect(); }
+        audioSourceNode = audioContext.createMediaStreamSource(currentStream);
+        audioSourceNode.connect(delayNode);
     }
 
     // カメラのON/OFFを切り替える関数
@@ -191,7 +181,7 @@
             cameraToggleButton.textContent = 'カメラON';
             isCameraOn = false;
         } else {
-            startCamera(videoDevices[currentDeviceIndex]?.deviceId);
+            setupStream(videoDevices[currentDeviceIndex]?.deviceId);
         }
     }
 
@@ -205,7 +195,8 @@
         if (speed > 0) {
             const realDelayTime = distanceMeters / speed;
             const playableDelayTime = Math.min(realDelayTime, MAX_DELAY_SECONDS);
-            delayNode.delayTime.value = playableDelayTime;
+            // delayTimeの値が0未満にならないようにガード
+            delayNode.delayTime.value = Math.max(0, playableDelayTime);
             delayValue.textContent = realDelayTime.toFixed(2);
         }
     }
@@ -218,89 +209,104 @@
         const maxDistanceInUnit = (unit === 'km') ? maxDistanceMeters / 1000 : maxDistanceMeters;
 
         distanceSlider.step = (unit === 'km') ? 0.1 : 10;
-        distanceInput.max = maxDistanceInUnit;
-        distanceSlider.max = maxDistanceInUnit;
+        const currentVal = parseFloat(distanceInput.value);
+
+        distanceInput.max = maxDistanceInUnit.toFixed(3);
+        distanceSlider.max = maxDistanceInUnit.toFixed(3);
         distanceLimitMessage.textContent = `(設定可能な最大距離: ${maxDistanceInUnit.toFixed(1)} ${unit})`;
 
-        if (parseFloat(distanceInput.value) > maxDistanceInUnit) {
-            distanceInput.value = maxDistanceInUnit;
-            distanceSlider.value = maxDistanceInUnit;
+        if (currentVal > maxDistanceInUnit) {
+            distanceInput.value = maxDistanceInUnit.toFixed(3);
+            distanceSlider.value = maxDistanceInUnit.toFixed(3);
         }
         updateDelay();
     }
-
-    // === 5. イベントリスナーの設定 ===
     
-    // 開始ボタン
-    startButton.addEventListener('click', async () => {
-        try {
-            if (audioContext.state === 'suspended') {
-                await audioContext.resume();
+    // === 5. イベントリスナーの設定をまとめた関数 ===
+    function setupEventListeners() {
+        // 開始ボタン
+        startButton.addEventListener('click', async () => {
+            try {
+                // 1. 音声システムをユーザー操作で有効化
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+
+                // 2. マイクとカメラへのアクセス許可を求め、ストリームを確保
+                await setupStream();
+
+                // 3. ストリーム確保後に、音声の最終出口までを接続
+                delayNode.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                // 4. 利用可能なカメラデバイスをリストアップ
+                videoDevices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+                if (videoDevices.length > 1) {
+                    cameraSwitchButton.style.display = 'inline-block';
+                }
+                cameraToggleButton.style.display = 'inline-block';
+
+                // 5. UIを操作可能にする
+                statusElement.textContent = "シミュレーション中です。";
+                startButton.style.display = 'none';
+                controlsElement.style.display = 'block';
+                updateDistanceControls();
+
+            } catch (error) {
+                console.error("開始処理中にエラーが発生しました:", error);
+                statusElement.innerHTML = "<p>エラーが発生しました。カメラとマイクの許可を確認し、ページを再読み込みしてください。</p>";
             }
-            delayNode.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            
-            await startCamera();
-            
-            statusElement.textContent = "シミュレーション中です。";
-            startButton.style.display = 'none';
-            controlsElement.style.display = 'block';
+        });
+
+        // カメラ切り替えボタン
+        cameraSwitchButton.addEventListener('click', () => {
+            if (videoDevices.length > 1) {
+                currentDeviceIndex = (currentDeviceIndex + 1) % videoDevices.length;
+                setupStream(videoDevices[currentDeviceIndex].deviceId);
+            }
+        });
+
+        // カメラON/OFFボタン
+        cameraToggleButton.addEventListener('click', toggleCamera);
+
+        // 音量スライダー
+        volumeSlider.addEventListener('input', () => {
+            gainNode.gain.value = volumeSlider.value;
+        });
+
+        // 音速セレクター
+        speedSelector.addEventListener('change', updateDistanceControls);
+
+        // 距離入力（数値）
+        distanceInput.addEventListener('input', () => {
+            resetAudioBuffer();
+            const value = parseFloat(distanceInput.value) || 0;
+            const max = parseFloat(distanceInput.max);
+            if (value > max) {
+                distanceInput.value = max;
+            }
+            distanceSlider.value = distanceInput.value;
+            updateDelay();
+        });
+
+        // 単位セレクター
+        unitSelector.addEventListener('change', () => {
+            resetAudioBuffer();
             updateDistanceControls();
-        } catch (error) {
-            console.error("開始処理中にエラーが発生しました:", error);
-            statusElement.innerHTML = "<p>エラーが発生しました。ページを再読み込みしてください。</p>";
-        }
-    });
+        });
 
-    // カメラ切り替えボタン
-    cameraSwitchButton.addEventListener('click', () => {
-        if (videoDevices.length > 1) {
-            currentDeviceIndex = (currentDeviceIndex + 1) % videoDevices.length;
-            const nextDeviceId = videoDevices[currentDeviceIndex].deviceId;
-            startCamera(nextDeviceId);
-        }
-    });
+        // 距離スライダー
+        distanceSlider.addEventListener('input', () => {
+            resetAudioBuffer();
+            distanceInput.value = distanceSlider.value;
+            updateDelay();
+        });
 
-    // カメラON/OFFボタン
-    cameraToggleButton.addEventListener('click', toggleCamera);
-
-    // 音量スライダー
-    volumeSlider.addEventListener('input', () => {
-        gainNode.gain.value = volumeSlider.value;
-    });
-
-    // 音速セレクター
-    speedSelector.addEventListener('change', updateDistanceControls);
-
-    // 距離入力（数値）
-    distanceInput.addEventListener('input', () => {
-        resetAudioBuffer();
-        const value = parseFloat(distanceInput.value) || 0;
-        const max = parseFloat(distanceInput.max);
-        if (value > max) {
-            distanceInput.value = max;
-        }
-        distanceSlider.value = distanceInput.value;
-        updateDelay();
-    });
-
-    // 単位セレクター
-    unitSelector.addEventListener('change', () => {
-        resetAudioBuffer();
-        updateDistanceControls();
-    });
-
-    // 距離スライダー
-    distanceSlider.addEventListener('input', () => {
-        resetAudioBuffer();
-        distanceInput.value = distanceSlider.value;
-        updateDelay();
-    });
-
-    // 遅延表示トグル
-    toggleDelay.addEventListener('change', () => {
-        delayDisplayContainer.style.display = toggleDelay.checked ? 'block' : 'none';
-    });
+        // 遅延表示トグル
+        toggleDelay.addEventListener('change', () => {
+            delayDisplayContainer.style.display = toggleDelay.checked ? 'block' : 'none';
+        });
+    }
 
 </script>
 
